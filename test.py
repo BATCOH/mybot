@@ -129,39 +129,45 @@ class TestBot(unittest.TestCase):
 
         player.add_title(cur, 'Тестовое звание 1')
         self.conn.commit()
+        self.assertIsInstance(player.titles, set)
         self.assertEqual(len(player.titles), 1)
-        self.assertEqual(player.titles[0], 'Тестовое звание 1')
+        self.assertIn('Тестовое звание 1', player.titles)
         self.assertEqual(len(player.get_titles(cur)), 1)
 
         player.add_title(cur, 'Тестовое звание 2;')
         self.conn.commit()
+        self.assertIsInstance(player.titles, set)
         self.assertEqual(len(player.titles), 2)
-        self.assertEqual(player.titles[1], 'Тестовое звание 2;')
+        self.assertIn('Тестовое звание 2;', player.titles)
         self.assertEqual(len(player.get_titles(cur)), 2)
 
         player.add_title(cur, 'очень тестовое звание 3⚙️⚙️⚙️')
         self.conn.commit()
+        self.assertIsInstance(player.titles, set)
         self.assertEqual(len(player.titles), 3)
-        self.assertEqual(player.titles[2], 'очень тестовое звание 3⚙️⚙️⚙️')
+        self.assertIn('очень тестовое звание 3⚙️⚙️⚙️', player.titles)
         self.assertEqual(len(player.get_titles(cur)), 3)
 
         # del_title
         player.del_title(cur, 'Несуществующее звание')
         self.conn.commit()
+        self.assertIsInstance(player.titles, set)
         self.assertEqual(len(player.titles), 3)
         self.assertEqual(len(player.get_titles(cur)), 3)
         # TODO
 
         player.del_title(cur, 'Тестовое звание 2;')
         self.conn.commit()
+        self.assertIsInstance(player.titles, set)
         self.assertEqual(len(player.titles), 2)
-        self.assertEqual(player.titles[0], 'Тестовое звание 1')
-        self.assertEqual(player.titles[1], 'очень тестовое звание 3⚙️⚙️⚙️')
+        self.assertIn('Тестовое звание 1', player.titles)
+        self.assertIn('очень тестовое звание 3⚙️⚙️⚙️', player.titles)
         self.assertEqual(len(player.get_titles(cur)), 2)
 
         # untitle
         player.clear_titles(cur)
         self.conn.commit()
+        self.assertIsInstance(player.titles, set)
         self.assertEqual(len(player.titles), 0)
         self.assertEqual(len(player.get_titles(cur)), 0)
 
