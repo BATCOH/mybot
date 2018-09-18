@@ -15,6 +15,7 @@ from enum import Enum
 
 import telegram as telega
 import yaml
+from telegram.error import BadRequest
 from telegram.ext import (CallbackQueryHandler, CommandHandler, Filters,
                           MessageHandler, Updater)
 
@@ -100,6 +101,7 @@ class Bot:
         self.apm_window = 0
         self.keyboards = {}
         self.triggers = {'all': {}}
+        self.newbies = {} # Stores recruiting info about new users by their ids.
         self.keyboards[Player.KeyboardType.DEFAULT] = telega.ReplyKeyboardMarkup(
             [[telega.KeyboardButton("💽 Моя статистика"),
               telega.KeyboardButton("🎖 Топы")],
@@ -235,6 +237,70 @@ class Bot:
         conn.commit()
         return True
 
+    def newbie_event(self, user_id: int, event_text: str, username=None):
+        '''
+        Путь начинающего убеженца:
+        Зашёл в чат
+        Стартанул Статбота
+        Скинул статы в статбота
+        {ответственный}: #вербую
+        {ответственный}: #принят в {отряд}
+        '''
+        recruting_chat_id = -1001289414206
+        if user_id not in self.newbies.keys():
+            self.newbies[user_id] = {
+                'username': username,
+                'message_id': None,
+                'events': [],
+            }
+
+        self.newbies[user_id]['events'].append('<strong>{}</strong> {}'.format(
+            datetime.datetime.now().strftime('%d.%m %H:%M'), event_text))
+
+        username = username or self.newbies[user_id]['username'] or ''
+        if username:
+            username = '@{}'.format(username)
+
+        message_text = '<a href="tg://user?id={}">#{}</a> {}\n{}'.format(
+            user_id, user_id, username,
+            '\n'.join(self.newbies[user_id]['events']))
+        if '#принят' in event_text:
+            markup = telega.InlineKeyboardMarkup([])
+        else:
+            markup = telega.InlineKeyboardMarkup([[
+                telega.InlineKeyboardButton(
+                    text='#вербую',
+                    callback_data='recruiting {}'.format(user_id))
+            ]])
+        if self.newbies[user_id]['message_id']:
+            try:
+                self.message_manager.update_msg(
+                    chat_id=recruting_chat_id,
+                    message_id=self.newbies[user_id]['message_id'],
+                    text=message_text,
+                    parse_mode='HTML',
+                    disable_web_page_preview=True,
+                    reply_markup=markup)
+            except BadRequest:  # Message deleted or something wrong
+                message = self.message_manager.send_message(
+                    chat_id=recruting_chat_id,
+                    text=message_text,
+                    parse_mode='HTML',
+                    disable_web_page_preview=True,
+                    reply_markup=markup).result()
+                self.newbies[user_id]['message_id'] = message.message_id
+        else:
+            message = self.message_manager.send_message(
+                chat_id=recruting_chat_id,
+                text=message_text,
+                parse_mode='HTML',
+                disable_web_page_preview=True,
+                reply_markup=markup).result()
+            self.newbies[user_id]['message_id'] = message.message_id
+
+        if '#принят' in event_text:
+            del self.newbies[user_id]
+
     def handle_start(self, bot, update):
         message = update.message
         user = message.from_user
@@ -245,9 +311,18 @@ class Bot:
                                               reply_markup=telega.ReplyKeyboardRemove())
             return
         elif user.id not in self.users.keys():
+            message_text = (
+                "Привет, давай знакомиться!\n"
+                "Перейди в игру, открой 📟 Пип-бой, "
+                "нажми команду <code>/me</code> внизу и перешли мне сообщение с полным профилем"
+            )
+            markup = telega.InlineKeyboardMarkup(
+                [[telega.InlineKeyboardButton(text="Перейти в игру", url="https://t.me/WastelandWarsBot")]])
             self.message_manager.send_message(chat_id=message.chat_id,
-                                              text="Привет, давай знакомиться.\nКидай мне форвард своих статов",
-                                              reply_markup=telega.ReplyKeyboardRemove())
+                                              text=message_text,
+                                              parse_mode='HTML',
+                                              reply_markup=markup)
+            self.newbie_event(user.id, 'Запустил Статбота', user.username)
             return
         self.users[user.id].keyboard = Player.KeyboardType.DEFAULT
         self.message_manager.send_message(chat_id=message.chat_id, text="Рад тебя видеть",
@@ -778,7 +853,7 @@ class Bot:
                     self.message_manager.send_message(chat_id=squad, text=text, parse_mode='HTML')
                 except:
                     pass
-    
+
     def parse_raid_result(self, raid_datetime, message_text):
         locations = {
             'Старая фабрика': ('📦', 5),
@@ -810,7 +885,7 @@ class Bot:
                 raid_result[fraction].append('{}{}'.format(*locations[location]))
             else: # in case of new raid locations in game update
                 raid_result[fraction].append(location)
-        
+
         # Sort by locations count but preserve given in `fractions` order if location counters are same
         sorter = lambda x: (fractions.index(x[0])/10 if x[0] in fractions else 0) - len(x[1])
         raid_result = sorted(raid_result.items(), key=sorter)
@@ -820,7 +895,7 @@ class Bot:
             if len(result) > 4:
                 result.insert(4, '\n  ')
             text += '<b>{} +{}</b>\n   {}\n'.format(fraction, len(result)*15, ' '.join(result))
-        
+
         return text
 
     def clear_meetings(self, uid):
@@ -1198,6 +1273,10 @@ class Bot:
                                                         self.squadnames[
                                                             short] + "</b>"),
                                                   parse_mode='HTML')
+                if uid in self.newbies.keys():
+                    self.newbie_event(
+                        uid, '@{}: #принят в {}'.format(
+                            user.username, self.squadnames[short]))
             conn.commit()
         elif name == 'echo':
             type = modifier
@@ -1629,7 +1708,7 @@ class Bot:
     def start(self):
         self.updater.start_polling(clean=True)
         self.updater.idle()
-    
+
     def stop(self):
         self.updater.stop()
         self.message_manager.stop()
@@ -1665,9 +1744,11 @@ class Bot:
             if user.id not in self.users.keys():
                 if profile.fraction != "⚙️Убежище 6":
                     self.message_manager.send_message(chat_id=chat_id, text="А ты фракцией не ошибся?")
+                    self.newbie_event(user.id, 'Ошибся фракцией ({})'.format(profile.fraction), user.username)
                     return
                 if parse_result.timedelta > datetime.timedelta(minutes=2):
                     self.message_manager.send_message(chat_id=chat_id, text="А можно профиль посвежее?")
+                    self.newbie_event(user.id, 'Скинул старый пипбой', user.username)
                     return
                 self.users[user.id] = Player(cur)
                 self.users[user.id].id = user.id
@@ -1681,8 +1762,15 @@ class Bot:
                     return
                 conn.commit()
                 self.users[user.id].keyboard = Player.KeyboardType.DEFAULT
-                self.message_manager.send_message(chat_id=chat_id, text="Я тебя запомнил",
+                message_text = (
+                    'Добро пожаловать в ⚙️ Убежище 6!\n'
+                    'Теперь тебе доступна твоя статистика и общие топы фракции\n'
+                    'В ближайшее время тебе напишет представитель отряда и расскажет что делать дальше\n\n'
+                    'Не забывай обновлять свой профиль регулярно — это показатель твоей активности в игре'
+                )
+                self.message_manager.send_message(chat_id=chat_id, text=message_text,
                                                   reply_markup=self.keyboards[Player.KeyboardType.DEFAULT])
+                self.newbie_event(user.id, 'Познакомился со Статботом', user.username)
 
             player = self.users[user.id]
             player.username = parse_result.username
@@ -1723,11 +1811,11 @@ class Bot:
                                                                            parse_mode='HTML')
                     self.message_manager.send_message(callback=call, chat_id=self.squadids[player.squad], text=text,
                                                       parse_mode='HTML')
-                self.message_manager.send_message(chat_id=player.chatid, text="Засчитан успешный рейд",
+                self.message_manager.send_message(chat_id=player.chatid, text="🏆 Засчитан успешный рейд",
                                                   parse_mode='HTML')
             player.set_stats(cur, ps, 4)
             player.update_text(cur)
-            self.message_manager.send_message(chat_id=player.chatid, text="Я занес твои результаты")
+            self.message_manager.send_message(chat_id=player.chatid, text="Профиль обновлён")
             conn.commit()
             return
 
@@ -2003,16 +2091,36 @@ class Bot:
     def handle_new_members(self, bot, update: telega.Update):
         users = update.message.new_chat_members
         chat_id = update.message.chat_id
-        if self.squads_by_id.get(chat_id) not in ('v6', 'ld', 'a6'):
+        if self.squads_by_id.get(chat_id) not in ('v6', 'ld', 'la', 'a6'):
             return
         time.sleep(2)
         for user in users:
-            text = "Рад тебя видеть, <b>{}</b>".format(self.users[user.id].nic) if user.id in self.users.keys() else \
-                "Привет, @{}! Давай знакомиться! Я бот-статистик этого убежища.\nГо в личку)".format(user.username)
-            self.message_manager.send_message(chat_id=chat_id, text=text, parse_mode='HTML')
-            if self.squads_by_id.get(chat_id) == 'v6' and user.id not in self.users.keys():
-                self.message_manager.send_message(chat_id=-1001289414206, text="@{} замечен на просторах общего чата"
-                                                  .format(user.username))
+            if user.id in self.users.keys():
+                message_text = "Рад тебя видеть, <b>{}</b>".format(self.users[user.id].nic)
+                markup = telega.InlineKeyboardMarkup([])
+            else:
+                if user.username:
+                    username = '@{}'.format(user.username)
+                else:
+                    username = '#{}'.format(user.id)
+
+                message_text = (
+                    '{}, добро пожаловать!\n'
+                    'Я фракционный бот ⚙️ Убежища 6.\n'
+                    'Пройди небольшую регистрацию, чтобы попасть в 📚 Академию\n\n'
+                    '📚 Академия — первый отряд нашего убежища. Там:\n'
+                    ' 🔹 Ответят на любые вопросы\n'
+                    ' 🔹 Расскажут, куда идти на рейд\n'
+                    ' 🔹 Поддержат оружием активных игроков\n'
+                    ' 🔹 Направят в отряд после завершения обучения'
+                ).format(username)
+                url = 'https://t.me/{}'.format(bot.name[1:])
+                markup = telega.InlineKeyboardMarkup([[
+                    telega.InlineKeyboardButton(
+                        text="Зарегистрироваться", url=url)
+                ]])
+                self.newbie_event(user.id, 'Зашёл в фрак. чат', user.username)
+            self.message_manager.send_message(chat_id=chat_id, text=message_text, parse_mode='HTML', reply_markup=markup)
 
     def handle_callback(self, bot: telega.Bot, update: telega.Update):
         query = update.callback_query
@@ -2131,6 +2239,9 @@ class Bot:
                 return
             self.pinkm.change_status(user.id, self.squads_by_id[chat_id], PinOnlineKm.PlayerStatus.ONPLACE)
             bot.answer_callback_query(callback_query_id=query.id, text="Done")
+        elif text == "recruiting":
+            bot.answer_callback_query(callback_query_id=query.id, text="👍")
+            self.newbie_event(int(name), '@{}: #вербую'.format(user.username))
         if s != "":
             markup = []
             if "top" in text or "players" in text:
